@@ -1073,7 +1073,8 @@ internal static class ControlFrame
         CcRegister oddRegister,
         in CcState state,
         ITxIqSource? iqSource = null,
-        IRxAudioSource? rxAudioSource = null)
+        IRxAudioSource? rxAudioSource = null,
+        Hl2I2cOp? rawOddCc = null)
     {
         if (packet.Length != PacketLength)
             throw new ArgumentException("packet span must be 1032 bytes", nameof(packet));
@@ -1088,7 +1089,11 @@ internal static class ControlFrame
         BinaryPrimitives.WriteUInt32BigEndian(packet[4..8], sendSequence);
 
         WriteUsbFrame(packet.Slice(8, UsbFrameLength), evenRegister, in state, iqSource, rxAudioSource);
-        WriteUsbFrame(packet.Slice(8 + UsbFrameLength, UsbFrameLength), oddRegister, in state, iqSource, rxAudioSource);
+        // The odd frame is the injection point for the HL2 IO board's
+        // tunnelled I2C traffic. It displaces one rotation slot rather than
+        // adding a packet, so the EP2 cadence the TX FIFO depends on is
+        // untouched; the displaced register comes round again next turn.
+        WriteUsbFrame(packet.Slice(8 + UsbFrameLength, UsbFrameLength), oddRegister, in state, iqSource, rxAudioSource, rawOddCc);
     }
 
     /// <summary>
@@ -1107,12 +1112,22 @@ internal static class ControlFrame
     /// <summary>Number of IQ samples per 504-byte EP2 USB-frame payload (63 × 8 bytes).</summary>
     internal const int IqSamplesPerUsbFrame = 63;
 
-    private static void WriteUsbFrame(Span<byte> frame, CcRegister register, in CcState state, ITxIqSource? source, IRxAudioSource? rxAudioSource = null)
+    private static void WriteUsbFrame(Span<byte> frame, CcRegister register, in CcState state, ITxIqSource? source, IRxAudioSource? rxAudioSource = null, Hl2I2cOp? rawCc = null)
     {
         frame[0] = 0x7F;
         frame[1] = 0x7F;
         frame[2] = 0x7F;
-        WriteCcBytes(frame.Slice(3, 5), register, in state);
+        if (rawCc is { } op)
+        {
+            // HL2 extended command set: the control block carries a tunnelled
+            // I2C transaction instead of a register address, so the normal
+            // register encoder must not run over it.
+            op.WriteTo(frame.Slice(3, 5), state.Mox);
+        }
+        else
+        {
+            WriteCcBytes(frame.Slice(3, 5), register, in state);
+        }
 
         // Surface the current commanded drive byte for the 1 Hz p1.tx.rate log
         // regardless of which payload path runs below. The actual register

@@ -52,7 +52,10 @@ public static class RadioHardwareEndpoints
         // on the wire immediately. Honoured on HL2 only on the wire.
         endpoints.MapGet("/api/radio/hl2-options", (RadioService radio) =>
         {
-            return Results.Ok(new Hl2OptionsDto(BandVolts: radio.GetHl2BandVolts()));
+            return Results.Ok(new Hl2OptionsDto(
+                BandVolts: radio.GetHl2BandVolts(),
+                IoBoard: radio.GetHl2IoBoard(),
+                IoBoardPresent: radio.GetHl2IoBoardPresent()));
         });
 
         endpoints.MapPut("/api/radio/hl2-options", (Hl2OptionsSetRequest req, RadioService radio) =>
@@ -61,7 +64,12 @@ public static class RadioHardwareEndpoints
                 return Results.BadRequest(new { error = "body required" });
 
             var effective = radio.SetHl2BandVolts(req.BandVolts);
-            return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
+            // Partial update: only touch the IO board when the caller said so.
+            if (req.IoBoard is { } ioBoard) radio.SetHl2IoBoard(ioBoard);
+            return Results.Ok(new Hl2OptionsDto(
+                BandVolts: effective,
+                IoBoard: radio.GetHl2IoBoard(),
+                IoBoardPresent: radio.GetHl2IoBoardPresent()));
         });
 
         // HL2 user GPIO (external-port parity audit — re-port of external-ports

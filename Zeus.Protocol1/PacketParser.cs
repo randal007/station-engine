@@ -136,6 +136,35 @@ internal static class PacketParser
     }
 
     /// <summary>
+    /// Extract a Hermes-Lite 2 I2C reply from an EP6 packet, if one is
+    /// present. The HL2 answers a tunnelled I2C read by echoing the reply on
+    /// C&amp;C address 0x3D — <c>(C0 &amp; 0x7E) >> 1</c>, with C0[0] still
+    /// carrying the PTT echo — and putting the board's data in C1..C4.
+    /// <para>
+    /// Both USB frames are checked and the first match wins: a reply occupies
+    /// whichever frame the radio had free, and only one read is ever
+    /// outstanding at a time (the scheduler issues at most one per 35 ms).
+    /// </para>
+    /// </summary>
+    /// <param name="packet">1032-byte Metis EP6 frame.</param>
+    /// <param name="cc">Receives the five C&amp;C bytes on success.</param>
+    /// <returns>true when a 0x3D-addressed reply was found.</returns>
+    public static bool TryExtractHl2I2cReply(ReadOnlySpan<byte> packet, Span<byte> cc)
+    {
+        if (packet.Length < PacketLength || cc.Length < 5) return false;
+
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int at = MetisHeaderLength + (frame * UsbFrameLength) + 3;
+            if (((packet[at] & 0x7E) >> 1) != Hl2IoBoardScheduler.ReplyCcAddress) continue;
+            packet.Slice(at, 5).CopyTo(cc);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Read a 24-bit big-endian signed integer with sign-extension to int32.
     /// </summary>
     public static int ReadInt24BigEndian(ReadOnlySpan<byte> b)

@@ -281,6 +281,51 @@ public sealed class PreferredRadioStore : IDisposable
     }
 
     /// <summary>
+    /// HL2 IO board enable. When true the Protocol-1 client tunnels the
+    /// transmit frequency, RF-input routing and receive frequency codes to
+    /// the board's Pico over I2C-2. Defaults to <c>false</c>; consulted only
+    /// on HL2.
+    /// </summary>
+    public bool GetEnableHl2IoBoard()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            return e?.EnableHl2IoBoard ?? false;
+        }
+    }
+
+    /// <summary>
+    /// Persists the operator's IO board choice into the same single-row
+    /// preferences entry as the board / variant / Band Volts fields.
+    /// </summary>
+    public void SetEnableHl2IoBoard(bool enabled)
+    {
+        lock (_sync)
+        {
+            var existing = _entries.FindAll().FirstOrDefault();
+            if (existing is null)
+            {
+                _entries.Insert(new PreferredRadioEntry
+                {
+                    Board = HpsdrBoardKind.Unknown,
+                    OverrideDetection = false,
+                    OrionMkIIVariantChosen = false,
+                    EnableHl2IoBoard = enabled,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.EnableHl2IoBoard = enabled;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>
     /// ANAN-G2/Saturn ADC dither enable. Defaults to <c>true</c>, matching
     /// the Thetis G2 option block. Nullable storage lets older LiteDB rows
     /// that pre-date the field inherit the default-on behaviour.
@@ -466,6 +511,10 @@ public sealed class PreferredRadioEntry
     /// <c>false</c> for older rows that pre-date this field, which matches
     /// the shipping default.</summary>
     public bool EnableHl2BandVolts { get; set; }
+    /// <summary>HL2 IO board (N2ADR) side-channel enable. Hydrates as
+    /// <c>false</c> for rows written before this field existed, which is the
+    /// shipping default: no I2C traffic unless the operator asks for it.</summary>
+    public bool EnableHl2IoBoard { get; set; }
     /// <summary>ANAN-G2/Saturn ADC dither enable. Nullable so upgraded rows
     /// can inherit the default-on value instead of silently disabling a radio
     /// option Thetis leaves enabled.</summary>

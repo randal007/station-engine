@@ -2433,12 +2433,26 @@ public sealed record RadioSpeakerOutputSetRequest(
 // fork repurposes from the obsolete LT2208 DITHER bit; lit, HL2 emits
 // per-band-tagged PWM voltage on the FAN connector so an external amp
 // (Xiegu XPA125B etc.) can auto-band-switch.
-public sealed record Hl2OptionsDto(bool BandVolts);
+public sealed record Hl2OptionsDto(
+    bool BandVolts,
+    // IO board (N2ADR) side channel. Optional so a client built against the
+    // Band-Volts-only shape still deserializes this response.
+    bool IoBoard = false,
+    // Whether the board has actually answered on the live connection, or null
+    // when no radio is connected. Lets the UI distinguish "switched on" from
+    // "switched on and talking", which is the difference between a working
+    // install and a missing 0x41 detect.
+    bool? IoBoardPresent = null);
 
 // Mutating version — currently a passthrough of Hl2OptionsDto but kept
 // distinct so the GET-vs-PUT request shapes can diverge in the future
 // (e.g. PUT becoming a partial update with nullable fields).
-public sealed record Hl2OptionsSetRequest(bool BandVolts);
+public sealed record Hl2OptionsSetRequest(
+    bool BandVolts,
+    // Nullable = partial update, exactly the divergence the comment above
+    // anticipated. An older client PUTs only BandVolts; without this being
+    // nullable that request would silently switch the IO board off.
+    bool? IoBoard = null);
 
 // HL2 user GPIO (external-port parity audit — re-port of external-ports plan
 // Phase 5). The 4-bit user_dig_out mask driven on the Protocol-1 0x0a/wire-0x14

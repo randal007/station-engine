@@ -370,6 +370,10 @@ internal static class BoardCapabilitiesTable
         // card + the /api/radio/hl2-gpio endpoint. External-port parity audit
         // (re-port of external-ports plan Phase 5). Default mask 0.
         HasHl2UserGpio: true,
+        // HL2 IO board (N2ADR) — tunnelled I2C-2 to the Pico at 0x1D, detected
+        // via the hard-wired PCA9536D at 0x41. Gates the Radio Settings
+        // checkbox; the side channel stays silent until the operator asks.
+        HasHl2IoBoard: true,
         // HL2 has a SINGLE antenna jack forwarding to the N2ADR pad: NO RX
         // antenna relays, NO TX antenna relays, NO aux inputs — antenna slice
         // (#804). Explicit (not just defaulted) because the wire-layer clamp in

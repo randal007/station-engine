@@ -1597,6 +1597,10 @@ public sealed class RadioService : IDisposable
                 && _preferredRadioStore is not null)
             {
                 client.EnableHl2BandVolts = _preferredRadioStore.GetEnableHl2BandVolts();
+                // IO board side channel. Rehydrated on every fresh client so a
+                // reconnect re-detects the board rather than inheriting a
+                // presence flag from a radio that may have been re-cabled.
+                client.EnableHl2IoBoard = _preferredRadioStore.GetEnableHl2IoBoard();
             }
 
             // LT2208 ADC dither / digital-output randomizer — rehydrate the
@@ -5138,6 +5142,37 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public bool GetHl2BandVolts() =>
         _preferredRadioStore?.GetEnableHl2BandVolts() ?? false;
+
+    /// <summary>
+    /// Enable or disable the HL2 IO board side channel. Persists first, then
+    /// pushes to the live client, mirroring <see cref="SetHl2BandVolts"/>.
+    /// Unlike Band Volts this is a no-op on the wire for any non-HL2 board:
+    /// the client gates the transactions on <c>BoardKind</c> because the
+    /// extended I2C opcodes are HL2-only and mean something else elsewhere.
+    /// </summary>
+    public bool SetHl2IoBoard(bool enabled)
+    {
+        _preferredRadioStore?.SetEnableHl2IoBoard(enabled);
+        if (_activeClient is not null)
+        {
+            _activeClient.EnableHl2IoBoard = enabled;
+        }
+        return enabled;
+    }
+
+    /// <summary>
+    /// Reads the persisted HL2 IO board preference for the
+    /// <c>/api/radio/hl2-options</c> GET endpoint.
+    /// </summary>
+    public bool GetHl2IoBoard() =>
+        _preferredRadioStore?.GetEnableHl2IoBoard() ?? false;
+
+    /// <summary>
+    /// Whether the IO board has actually answered on the live connection.
+    /// Distinct from the setting: the switch says "look for it", this says
+    /// "it is there". Null when no client is connected.
+    /// </summary>
+    public bool? GetHl2IoBoardPresent() => _activeClient?.Hl2IoBoardPresent;
 
     private bool SupportsG2AdcOptions(HpsdrBoardKind board, OrionMkIIVariant variant) =>
         BoardCapabilitiesTable.For(board, variant).SupportsG2AdcOptions;

@@ -198,7 +198,18 @@ public sealed record BoardCapabilities(
     /// returns 409 on a non-HL2 board. True for Hermes-Lite 2 only. Default 0 →
     /// byte-identical to a board that never drives the lines. External-port
     /// parity audit (re-port of external-ports plan Phase 5).</summary>
-    bool HasHl2UserGpio = false)
+    bool HasHl2UserGpio = false,
+    /// <summary>Hermes-Lite 2 can carry the N2ADR IO board, a Pico daughter
+    /// board on the filter-board header that takes the transmit frequency,
+    /// RF-input routing and receive frequency codes over the HL2's tunnelled
+    /// I2C-2 channel (jimahlstrom/HL2IOBoard) and drives amplifier, antenna,
+    /// transverter, fan and AH-4 tuner lines from them. The frontend gates the
+    /// Radio Settings "IO board" checkbox on this flag; the switch itself
+    /// rides <c>/api/radio/hl2-options</c>. True for Hermes-Lite 2 only — the
+    /// 0x7A / 0xFA opcodes are HL2 extended commands and are not I2C on any
+    /// other Protocol-1 board. Whether a board is actually fitted is runtime
+    /// state, reported separately as <c>IoBoardPresent</c>.</summary>
+    bool HasHl2IoBoard = false)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a

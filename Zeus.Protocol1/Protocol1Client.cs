@@ -128,6 +128,13 @@ public sealed class Protocol1Client : IProtocol1Client
     // HL2's AD9866 doesn't need (see hermes-lite2-protocol.md line 39 and
     // mi0bot's HL2 fork, which exposes this in the UI as "Band Volts").
     private int _enableHl2BandVolts;
+
+    // HL2 IO board (N2ADR). The scheduler owns detection and the register
+    // round-robin; this client only decides when its transactions may ride
+    // the wire. Default off — an HL2 with no board fitted, or an operator who
+    // has not asked for it, produces byte-identical EP2 traffic to before.
+    private readonly Hl2IoBoardScheduler _hl2IoBoard = new();
+    private int _enableHl2IoBoard;
     // LT2208 ADC dither / digital-output randomizer (Config-frame C3 bits 3/4
     // on non-HL2 boards). Default off — matches Thetis netInterface.c init and
     // keeps the Config frame byte-identical until an operator opts in. Gated to
@@ -632,6 +639,7 @@ public sealed class Protocol1Client : IProtocol1Client
             // external key released during PS+TX still propagates the edge.
             UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
             UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(packet, BoardKind));
+            FeedHl2IoBoardReply(packet);
 
             // DDC0 → IqFrame channel — keeps panadapter / audio alive during PS+TX.
             // Use a fresh rented buffer the channel can own; the ddc0 rental is
@@ -835,6 +843,7 @@ public sealed class Protocol1Client : IProtocol1Client
 
             UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
             UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(packet, BoardKind));
+            FeedHl2IoBoardReply(packet);
 
             var rented = ArrayPool<double>.Shared.Rent(2 * samples);
             new ReadOnlySpan<double>(ddc0, 0, 2 * samples)
@@ -973,6 +982,86 @@ public sealed class Protocol1Client : IProtocol1Client
     {
         get => Volatile.Read(ref _enableHl2BandVolts) != 0;
         set => Interlocked.Exchange(ref _enableHl2BandVolts, value ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Enable the Hermes-Lite 2 IO board side channel. Turning it off resets
+    /// the scheduler, so re-enabling re-detects rather than assuming a board
+    /// that may have been unplugged in between.
+    /// </summary>
+    public bool EnableHl2IoBoard
+    {
+        get => Volatile.Read(ref _enableHl2IoBoard) != 0;
+        set
+        {
+            if (Interlocked.Exchange(ref _enableHl2IoBoard, value ? 1 : 0) != 0 && !value)
+                _hl2IoBoard.Reset();
+        }
+    }
+
+    /// <summary>
+    /// True once the IO board has answered a detection read. False while the
+    /// feature is disabled, and false on a board-less HL2 no matter how long
+    /// it has been probed.
+    /// </summary>
+    public bool Hl2IoBoardPresent => EnableHl2IoBoard && _hl2IoBoard.Present;
+
+    /// <summary>
+    /// The IO board transaction due this EP2 tick, or null. Gated three ways:
+    /// the operator's switch, the board kind (the extended command set only
+    /// exists on HL2 — 0x7A means something else entirely on a legacy Hermes),
+    /// and the scheduler's own 35 ms cadence.
+    /// </summary>
+    private Hl2I2cOp? NextHl2IoBoardOp(in ControlFrame.CcState state)
+    {
+        if (!EnableHl2IoBoard || BoardKind != HpsdrBoardKind.HermesLite2) return null;
+
+        // RF-input routing (REG_RF_INPUTS). Modes 1 and 2 switch the receiver
+        // off the HL2's own antenna and onto the board's J9 external receive
+        // input; mode 2 additionally drives GPIO03_INTTR — the HL2's T/R
+        // relay — on receive. Both are meaningful ONLY when a separate
+        // receive antenna is actually wired into J9, which is exactly what
+        // deskHPSDR's `alex_antenna != 0` gate expresses.
+        //
+        // PureSignal does not need them. Per the board's own documentation:
+        // "in mode 0 the Pure Signal input J10 is mixed with the receive
+        // signal". Escalating to mode 2 because PS is armed switches the
+        // receiver to a jack that is empty on any station using J10 alone,
+        // and clicks the T/R relay while receiving.
+        //
+        // Zeus has no state that means "J9 is in use": HL2 reports no RX
+        // antenna relays (BoardCapabilities.HasRxAntennaRelays) and
+        // ControlFrame.EncodeRxAntennaC3Bits clamps every RX antenna to ANT1
+        // on this board, so RxAntenna can never say it either. Mode 0 is
+        // therefore the only correct value, and enabling J9 needs an explicit
+        // operator setting rather than an inference.
+        const byte rfInputs = 0;
+
+        // Zeus drives every NCO from one VFO, so RX1 and RX2 carry the same
+        // frequency code. The board expects both to be written regardless —
+        // leaving RX2 stale would let a previous session's code drive a band
+        // decision here.
+        var inputs = new Hl2IoBoardInputs(
+            TxFreqHz: state.VfoAHz,
+            Rx1FreqHz: state.VfoAHz,
+            Rx2FreqHz: state.VfoAHz,
+            RfInputs: rfInputs);
+
+        return _hl2IoBoard.NextOp(Environment.TickCount64, in inputs);
+    }
+
+    /// <summary>
+    /// Hand any 0x3D-addressed I2C reply in this EP6 packet to the scheduler.
+    /// Cheap enough to run unconditionally on the RX path when the feature is
+    /// on: it is a two-byte address compare per USB frame.
+    /// </summary>
+    private void FeedHl2IoBoardReply(ReadOnlySpan<byte> packet)
+    {
+        if (!EnableHl2IoBoard || BoardKind != HpsdrBoardKind.HermesLite2) return;
+
+        Span<byte> cc = stackalloc byte[5];
+        if (PacketParser.TryExtractHl2I2cReply(packet, cc))
+            _hl2IoBoard.OnI2cReply(cc);
     }
 
     public async Task ConnectAsync(IPEndPoint radioEndpoint, CancellationToken ct)
@@ -2873,6 +2962,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 // ExternalPttService can lift the host MOX when the operator
                 // keys the rear KEY jack or an external PTT line.
                 UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(buffer.AsSpan(0, n)));
+                FeedHl2IoBoardReply(buffer.AsSpan(0, n));
                 // Board-decoded CW key-down drives the local sidetone,
                 // separate from the held PTT.
                 UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(buffer.AsSpan(0, n), BoardKind));
@@ -3481,7 +3571,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
                 phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 7);
                 bool pacedAudioSend = !state.Mox && _audioEgressPacer.Active;
-                ControlFrame.BuildDataPacket(buf, NextEp2Seq(), first, second, in state, _txIqSource, _rxAudioSource);
+                ControlFrame.BuildDataPacket(buf, NextEp2Seq(), first, second, in state, _txIqSource, _rxAudioSource, NextHl2IoBoardOp(in state));
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
                 var elapsed = nowUtc - rateWindowStart;
