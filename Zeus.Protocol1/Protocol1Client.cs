@@ -129,6 +129,10 @@ public sealed class Protocol1Client : IProtocol1Client
     // mi0bot's HL2 fork, which exposes this in the UI as "Band Volts").
     private int _enableHl2BandVolts;
 
+    // HL2+ AK4951 companion board. Shares the Config C3 bit 3 with Band Volts —
+    // see ControlFrame.CcState.EnableHl2PlusCodec for why they cannot coexist.
+    private int _enableHl2PlusCodec;
+
     // HL2 IO board (N2ADR). The scheduler owns detection and the register
     // round-robin; this client only decides when its transactions may ride
     // the wire. Default off — an HL2 with no board fitted, or an operator who
@@ -563,6 +567,11 @@ public sealed class Protocol1Client : IProtocol1Client
     /// <inheritdoc />
     public void DetachRadioMicHandler() => _radioMicHandler = null;
 
+    /// <summary>True while a radio-mic relay handler is subscribed. The RX
+    /// loops do no mic work without one, so this is the single fact that says
+    /// whether the radio's own microphone can reach the TX chain.</summary>
+    public bool RadioMicHandlerAttached => _radioMicHandler is not null;
+
     /// <summary>
     /// Decode an HL2 4-DDC PS-armed EP6 packet — mi0bot's canonical layout
     /// (Thetis console.cs:8186-8265, networkproto1.c:WriteMainLoop_HL2,
@@ -982,6 +991,17 @@ public sealed class Protocol1Client : IProtocol1Client
     {
         get => Volatile.Read(ref _enableHl2BandVolts) != 0;
         set => Interlocked.Exchange(ref _enableHl2BandVolts, value ? 1 : 0);
+    }
+
+    /// <summary>
+    /// Declare the HL2+ AK4951 companion board. Sets the codec-present bit the
+    /// HL2+ gateware looks for, which is what makes the board's mic slots
+    /// carry audio and its L/R slots reach the headphone/speaker jacks.
+    /// </summary>
+    public bool EnableHl2PlusCodec
+    {
+        get => Volatile.Read(ref _enableHl2PlusCodec) != 0;
+        set => Interlocked.Exchange(ref _enableHl2PlusCodec, value ? 1 : 0);
     }
 
     /// <summary>
@@ -2383,6 +2403,20 @@ public sealed class Protocol1Client : IProtocol1Client
         Volatile.Read(ref _cwKeyerEnabled) != 0 && Volatile.Read(ref _cwSidetoneLevel) > 0;
 
     /// <summary>
+    /// What the CW frames are carrying right now, for diagnostics. internal_CW
+    /// and sidetoneLevel are the two bytes the gateware gates its own headphone
+    /// sidetone on (0x1E C1[0] and C2), so reading them back separates "Zeus
+    /// never sent it" from "the radio ignored it" — which are very different
+    /// problems on a board running non-stock gateware.
+    /// </summary>
+    public (bool InternalKeyer, int SidetoneLevel, int SidetoneHz, int Wpm, int Mode) CwWireState => (
+        Volatile.Read(ref _cwKeyerEnabled) != 0,
+        Volatile.Read(ref _cwSidetoneLevel),
+        Volatile.Read(ref _cwSidetoneFreqHz),
+        Volatile.Read(ref _cwKeyerSpeedWpm),
+        Volatile.Read(ref _cwKeyerMode));
+
+    /// <summary>
     /// Set the TX audio front-end (external-audio-jacks re-port). Global,
     /// per-radio — not per-band. <paramref name="micBoost"/> /
     /// <paramref name="micLineIn"/> ride the 0x12 frame on Hermes-class codec
@@ -2594,6 +2628,11 @@ public sealed class Protocol1Client : IProtocol1Client
             RxAntenna: (HpsdrAntenna)Volatile.Read(ref _antenna),
             Mox: moxOn,
             EnableHl2BandVolts: Volatile.Read(ref _enableHl2BandVolts) != 0,
+            EnableHl2PlusCodec: Volatile.Read(ref _enableHl2PlusCodec) != 0,
+            // Only the HL2+ carries audio under MOX today. Other codec boards
+            // keep their existing silence-while-keying behaviour until the
+            // change can be confirmed on that hardware.
+            CodecAudioWhileMox: Volatile.Read(ref _enableHl2PlusCodec) != 0,
             AdcDitherEnabled: Volatile.Read(ref _adcDither) != 0,
             AdcRandomEnabled: Volatile.Read(ref _adcRandom) != 0,
             Board: board,
@@ -3590,10 +3629,17 @@ public sealed class Protocol1Client : IProtocol1Client
                         // was maintained but never logged anywhere.
                         Interlocked.Read(ref _droppedFrames));
                     _log.LogInformation(
-                        "p1.rx.audio count={Count} totalWritten={Written} totalRead={Read} dropped={Dropped} underrunSamples={Underrun}",
-                        audioRing?.Count ?? 0, audioRing?.TotalWritten ?? 0,
+                        "p1.rx.audio count={Count}/{Target} totalWritten={Written} totalRead={Read} dropped={Dropped} trimmed={Trimmed} underrunSamples={Underrun} latencyMs={LatencyMs:F0}",
+                        audioRing?.Count ?? 0, audioRing?.LatencyTargetSamples ?? 0,
+                        audioRing?.TotalWritten ?? 0,
                         audioRing?.TotalRead ?? 0, audioRing?.Dropped ?? 0,
-                        audioRing?.UnderrunSamples ?? 0);
+                        // Trimmed climbing at a steady rate is host-vs-radio clock
+                        // drift; dropped climbing means the ring is too small for
+                        // the producer's bursts. latencyMs is what the operator
+                        // actually hears as delay on the radio's own speaker.
+                        audioRing?.Trimmed ?? 0,
+                        audioRing?.UnderrunSamples ?? 0,
+                        (audioRing?.Count ?? 0) / 48.0);
                     rateWindowStart = nowUtc;
                     rateWindowPkts = 0;
                     maxSendGapUs = 0;

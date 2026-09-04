@@ -55,7 +55,9 @@ public static class RadioHardwareEndpoints
             return Results.Ok(new Hl2OptionsDto(
                 BandVolts: radio.GetHl2BandVolts(),
                 IoBoard: radio.GetHl2IoBoard(),
-                IoBoardPresent: radio.GetHl2IoBoardPresent()));
+                IoBoardPresent: radio.GetHl2IoBoardPresent(),
+                Hl2Plus: radio.EffectiveHl2PlusCodec,
+                BandVoltsAvailable: !radio.EffectiveHl2PlusCodec));
         });
 
         endpoints.MapPut("/api/radio/hl2-options", (Hl2OptionsSetRequest req, RadioService radio) =>
@@ -63,13 +65,19 @@ public static class RadioHardwareEndpoints
             if (req is null)
                 return Results.BadRequest(new { error = "body required" });
 
+            // Apply HL2+ first: it owns Config C3 bit 3, so a request that
+            // arms the companion board and Band Volts together must resolve
+            // to the companion board winning rather than to request order.
+            if (req.Hl2Plus is { } hl2Plus) radio.SetHl2PlusCodec(hl2Plus);
             var effective = radio.SetHl2BandVolts(req.BandVolts);
             // Partial update: only touch the IO board when the caller said so.
             if (req.IoBoard is { } ioBoard) radio.SetHl2IoBoard(ioBoard);
             return Results.Ok(new Hl2OptionsDto(
                 BandVolts: effective,
                 IoBoard: radio.GetHl2IoBoard(),
-                IoBoardPresent: radio.GetHl2IoBoardPresent()));
+                IoBoardPresent: radio.GetHl2IoBoardPresent(),
+                Hl2Plus: radio.EffectiveHl2PlusCodec,
+                BandVoltsAvailable: !radio.EffectiveHl2PlusCodec));
         });
 
         // HL2 user GPIO (external-port parity audit — re-port of external-ports
@@ -83,7 +91,7 @@ public static class RadioHardwareEndpoints
         // never via the frontend, so no clobber-on-connect.
         endpoints.MapGet("/api/radio/hl2-gpio", (RadioService radio) =>
         {
-            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var caps = radio.EffectiveBoardCapabilities;
             return Results.Ok(new Hl2GpioDto(
                 Supported: caps.HasHl2UserGpio,
                 Bits: caps.HasHl2UserGpio ? radio.GetHl2GpioMask() : 0));
@@ -94,7 +102,7 @@ public static class RadioHardwareEndpoints
             if (req is null)
                 return Results.BadRequest(new { error = "body required" });
 
-            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var caps = radio.EffectiveBoardCapabilities;
             if (!caps.HasHl2UserGpio)
                 return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no user GPIO" });
 
@@ -126,7 +134,7 @@ public static class RadioHardwareEndpoints
         // Antenna state is server-authoritative and NEVER enters StateDto.
         endpoints.MapGet("/api/radio/antenna", (RadioService radio, AntennaSettingsStore store) =>
         {
-            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var caps = radio.EffectiveBoardCapabilities;
             var bands = store.GetAll()
                 .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
                 .ToArray();
@@ -162,7 +170,7 @@ public static class RadioHardwareEndpoints
             if (!Enum.TryParse<RxAuxInputSel>(rxAuxStr, ignoreCase: true, out var rxAux))
                 return Results.BadRequest(new { error = $"unknown rxAux '{req.RxAux}'" });
 
-            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var caps = radio.EffectiveBoardCapabilities;
             if (txAnt != HpsdrAntenna.Ant1 && !caps.HasTxAntennaRelays)
                 return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no TX antenna relays; only Ant1 is valid" });
             if (rxAnt != HpsdrAntenna.Ant1 && !caps.HasRxAntennaRelays)

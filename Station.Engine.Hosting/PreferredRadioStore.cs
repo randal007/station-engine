@@ -326,6 +326,48 @@ public sealed class PreferredRadioStore : IDisposable
     }
 
     /// <summary>
+    /// Whether the HL2+ AK4951 companion board is fitted. There is no way to
+    /// detect it — an HL2+ answers discovery exactly like a stock HL2 — so
+    /// this is the operator telling us, and it is what promotes the board's
+    /// capability fingerprint to a codec board. Defaults to <c>false</c>.
+    /// </summary>
+    public bool GetEnableHl2PlusCodec()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            return e?.EnableHl2PlusCodec ?? false;
+        }
+    }
+
+    /// <summary>Persists the operator's HL2+ declaration.</summary>
+    public void SetEnableHl2PlusCodec(bool enabled)
+    {
+        lock (_sync)
+        {
+            var existing = _entries.FindAll().FirstOrDefault();
+            if (existing is null)
+            {
+                _entries.Insert(new PreferredRadioEntry
+                {
+                    Board = HpsdrBoardKind.Unknown,
+                    OverrideDetection = false,
+                    OrionMkIIVariantChosen = false,
+                    EnableHl2PlusCodec = enabled,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.EnableHl2PlusCodec = enabled;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>
     /// ANAN-G2/Saturn ADC dither enable. Defaults to <c>true</c>, matching
     /// the Thetis G2 option block. Nullable storage lets older LiteDB rows
     /// that pre-date the field inherit the default-on behaviour.
@@ -515,6 +557,10 @@ public sealed class PreferredRadioEntry
     /// <c>false</c> for rows written before this field existed, which is the
     /// shipping default: no I2C traffic unless the operator asks for it.</summary>
     public bool EnableHl2IoBoard { get; set; }
+    /// <summary>HL2+ AK4951 companion board fitted. Hydrates as <c>false</c>
+    /// for rows written before this field existed — a stock HL2, which is the
+    /// correct default for hardware we have not been told about.</summary>
+    public bool EnableHl2PlusCodec { get; set; }
     /// <summary>ANAN-G2/Saturn ADC dither enable. Nullable so upgraded rows
     /// can inherit the default-on value instead of silently disabling a radio
     /// option Thetis leaves enabled.</summary>

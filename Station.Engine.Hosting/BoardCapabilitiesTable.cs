@@ -61,6 +61,29 @@ internal static class BoardCapabilitiesTable
     /// variants additionally advertise the bench-confirmed 1536 kHz P2 RX/DDC
     /// ceiling instead of the conservative 384 kHz fallback.
     /// </summary>
+    /// <summary>
+    /// Capability fingerprint, promoted for an HL2 carrying the AK4951
+    /// companion board (HL2+). The companion is undetectable — an HL2+ answers
+    /// discovery exactly like a stock HL2 — so the operator declares it and we
+    /// promote the fingerprint here, the same way an operator-chosen
+    /// <see cref="OrionMkIIVariant"/> selects between 0x0A fingerprints.
+    /// Promoting the capability rather than special-casing each consumer is
+    /// deliberate: the speaker sink, the P1 mic attach and the frontend all
+    /// already gate on <c>HasOnboardCodec</c>, so one lever lights all three.
+    /// </summary>
+    public static BoardCapabilities For(HpsdrBoardKind board, OrionMkIIVariant variant, bool hl2PlusCodec)
+    {
+        var caps = For(board, variant);
+        if (!hl2PlusCodec || board != HpsdrBoardKind.HermesLite2) return caps;
+
+        // The AK4951 is a genuine stream codec: mic in (with bias for an
+        // electret), headphone and speaker out, driven by the EP2 L/R slots
+        // and the EP6 mic slots like any other Protocol-1 codec board. It has
+        // no line-in jack and no balanced XLR, so those stay false and the
+        // matching UI options stay hidden.
+        return caps with { HasOnboardCodec = true, HasMicBias = true };
+    }
+
     public static BoardCapabilities For(HpsdrBoardKind board, OrionMkIIVariant variant) => board switch
     {
         // --- Hermes-class single-RX, Alex-class BPF, Hermes-side L/R swap ---

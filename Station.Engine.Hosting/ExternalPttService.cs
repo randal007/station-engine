@@ -355,14 +355,20 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     // True while the connected P1 radio's FPGA is generating its own headphone
     // sidetone (issue #1783), so the host must not also play one for the same
     // hardware key. Gated on HasOnboardCodec because that is where the gateware
-    // routes the tone; HL2 (no stream codec) never gets an FPGA sidetone and
-    // must keep the host monitor tone.
+    // routes the tone; a stock HL2 has no stream codec, never gets an FPGA
+    // sidetone, and must keep the host monitor tone.
+    //
+    // Uses the HL2+-promoted capability set: an HL2 carrying the AK4951
+    // companion board DOES generate its own sidetone, confirmed on hardware.
+    // Reading the unpromoted table here left the host playing a second tone
+    // over the radio's — heard as an occasional louder dit out of time with
+    // the paddle, on the host's speakers rather than the radio's phones.
     private bool HardwareSidetoneOwnsMonitor()
     {
         IProtocol1Client? client;
         lock (_sync) { client = _client; }
         if (client is null || !client.HardwareCwSidetoneActive) return false;
-        return BoardCapabilitiesTable.For(_radio.ConnectedBoardKind).HasOnboardCodec;
+        return _radio.EffectiveBoardCapabilities.HasOnboardCodec;
     }
 
     // Toggle the host CW monitor tone off a shaped key-down edge, gated to CW

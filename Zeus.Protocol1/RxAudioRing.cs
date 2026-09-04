@@ -44,10 +44,42 @@ namespace Zeus.Protocol1;
 public sealed class RxAudioRing : IRxAudioSource
 {
     // 16384 samples ≈ 340 ms at 48 kHz — matches TxIqRing's depth. Deep enough
-    // to ride out a GC pause or a bursty DSP tick without dropping, shallow
-    // enough that a steady-state backlog never adds audible latency to the
-    // radio-side monitor.
+    // to ride out a GC pause or a bursty DSP tick without dropping.
     public const int DefaultCapacitySamples = 16384;
+
+    // Steady-state depth, and therefore the monitor's latency. Capacity alone
+    // does not bound it: the producer runs on the host's DSP tick and the
+    // consumer on the radio's own 48 kHz clock, so any drift accumulates until
+    // the ring sits permanently full — a third of a second of delay, with
+    // drop-oldest discarding a chunk of audio every time it overflows. That is
+    // both audible latency and a periodic click.
+    //
+    // Trimming to a target on every write bounds the delay regardless of drift.
+    // 4096 samples ≈ 85 ms: comfortably above one producer block (~1600 samples
+    // at the 30 Hz audio cadence) plus scheduler jitter, so a healthy stream is
+    // never trimmed, and four times tighter than capacity when drift bites.
+    public const int DefaultLatencyTargetSamples = 3072;
+
+    // Most samples a single write may discard while correcting. The producer
+    // and the EP2 pacer do not run at exactly the same rate — measured on an
+    // HL2+, the DSP wrote 48016 samples/sec while the packer drained 47861 —
+    // so the ring creeps up and has to be corrected. Cutting the whole surplus
+    // at once is a step in the audio and is plainly audible as a pop every
+    // few seconds. Shaving a few samples per write is the same correction
+    // spread out: 8 samples is 0.17 ms, inaudible, and at the ~30 Hz audio
+    // cadence it removes up to 240 samples/sec — comfortably more than the
+    // ~155/sec surplus actually observed.
+    public const int MaxTrimPerWrite = 8;
+
+    // Startup priming depth. The EP2 packer starts asking for audio the moment
+    // a stream comes up, long before the DSP pipeline has produced any, so
+    // every early read is short and the codec gets a gap — heard as a run of
+    // faint pops for the first half-minute on a radio with a speaker jack.
+    // Serving silence until a little audio has banked converts that into one
+    // brief, inaudible delay at the start. 1024 samples ≈ 21 ms: about half a
+    // producer block, enough to cover the gap between blocks without adding
+    // delay a healthy stream would keep carrying.
+    public const int DefaultPrimeSamples = 1024;
 
     private readonly short[] _buf;
     private readonly int _capacity;
@@ -58,12 +90,20 @@ public sealed class RxAudioRing : IRxAudioSource
     private long _totalRead;
     private long _dropped;
     private long _underrunSamples;
+    private long _trimmed;
+    private bool _primed;
+    private readonly int _latencyTarget;
+    private readonly int _primeSamples;
 
-    public RxAudioRing(int capacitySamples = DefaultCapacitySamples)
+    public RxAudioRing(int capacitySamples = DefaultCapacitySamples,
+                       int latencyTargetSamples = DefaultLatencyTargetSamples,
+                       int primeSamples = DefaultPrimeSamples)
     {
         if (capacitySamples <= 0) throw new ArgumentOutOfRangeException(nameof(capacitySamples));
         _capacity = capacitySamples;
         _buf = new short[capacitySamples];
+        _latencyTarget = Math.Clamp(latencyTargetSamples, 1, capacitySamples);
+        _primeSamples = Math.Clamp(primeSamples, 0, _latencyTarget);
     }
 
     public int Capacity => _capacity;
@@ -77,6 +117,19 @@ public sealed class RxAudioRing : IRxAudioSource
     public long Dropped { get { lock (_gate) return _dropped; } }
     /// <summary>Total zero-filled sample slots requested after the ring ran dry.</summary>
     public long UnderrunSamples => Interlocked.Read(ref _underrunSamples);
+
+    /// <summary>Samples discarded to hold the ring at its latency target — the
+    /// running total of host-vs-radio clock drift.</summary>
+    public long Trimmed { get { lock (_gate) return _trimmed; } }
+
+    /// <summary>Steady-state depth the ring trims back to.</summary>
+    public int LatencyTargetSamples => _latencyTarget;
+
+    /// <summary>Depth the ring banks before it starts serving audio.</summary>
+    public int PrimeSamples => _primeSamples;
+
+    /// <summary>False while the ring is still filling and serving silence.</summary>
+    public bool Primed { get { lock (_gate) return _primed; } }
 
     /// <summary>
     /// Push one block of mono float samples (−1..+1) into the ring, saturating
@@ -96,6 +149,20 @@ public sealed class RxAudioRing : IRxAudioSource
                 else _dropped++;   // overwrote the oldest
             }
             _totalWritten += mono.Length;
+
+            // Shave the oldest audio back towards the target rather than let a
+            // rate mismatch park a growing backlog in front of the operator's
+            // ears. A few samples at a time: the correction is continuous and
+            // inaudible, where cutting the whole surplus at once steps the
+            // audio and pops. Counted apart from _dropped — an overflow means
+            // the ring was too small, a trim means the producer and the packer
+            // disagree on rate, and they call for different fixes.
+            if (_count > _latencyTarget)
+            {
+                int drop = Math.Min(_count - _latencyTarget, MaxTrimPerWrite);
+                _trimmed += drop;
+                _count -= drop;
+            }
         }
     }
 
@@ -110,6 +177,17 @@ public sealed class RxAudioRing : IRxAudioSource
 
         lock (_gate)
         {
+            // Still filling after a start or a flush: hand back nothing, which
+            // the packer writes as silence. Deliberately not counted as an
+            // underrun — the pipeline has not started yet, so there is no audio
+            // being lost, and counting it would bury the real starvation
+            // signal under startup noise.
+            if (!_primed)
+            {
+                if (_count < _primeSamples) return 0;
+                _primed = true;
+            }
+
             int n = Math.Min(dest.Length, _count);
             int tail = (_head - _count + _capacity) % _capacity;
             for (int k = 0; k < n; k++)
@@ -133,6 +211,9 @@ public sealed class RxAudioRing : IRxAudioSource
         {
             _count = 0;
             _head = 0;
+            // Re-prime: a flush is a T/R edge or a session change, and resuming
+            // straight into an empty ring reproduces the startup gaps.
+            _primed = false;
         }
     }
 

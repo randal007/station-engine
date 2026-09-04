@@ -7394,10 +7394,12 @@ public class DspPipelineService : BackgroundService,
                 p2.AttachRadioMicHandler(rb.Accept);
                 _radioMicAttached = true;
             }
-            // P1 codec mic extraction — only on codec boards (ANAN-10E et al);
-            // HL2 has no stream codec so its EP6 mic slots carry no audio.
+            // P1 codec mic extraction — codec boards (ANAN-10E et al) and an
+            // HL2 carrying the AK4951 companion board, whose gateware fills the
+            // same EP6 mic slots. A stock HL2 has no stream codec and its mic
+            // slots carry nothing, so it stays unattached.
             if (!_p1RadioMicAttached && p1 is not null && _p1RadioMicReceiver is not null
-                && BoardCapabilitiesTable.For(_radio.EffectiveBoardKind, _radio.EffectiveOrionMkIIVariant).HasOnboardCodec)
+                && _radio.EffectiveBoardCapabilities.HasOnboardCodec)
             {
                 var rb = _p1RadioMicReceiver;
                 p1.AttachRadioMicHandler(rb.Accept);
@@ -8539,6 +8541,33 @@ public class DspPipelineService : BackgroundService,
     /// start firing OnIqFrame on the DSP thread and any older engine reference
     /// must already be unused.
     /// </summary>
+    /// <summary>
+    /// Every link in the radio-microphone chain, for diagnostics. Each one
+    /// reads correct in isolation, so when the radio's mic is silent the only
+    /// way to find the break is to look at all of them at once.
+    /// </summary>
+    public object RadioMicChainSnapshot()
+    {
+        var ingest = _txIngest;
+        var recv = _p1RadioMicReceiver;
+        var sink = _attachedSinkP1;
+        return new
+        {
+            // Null when no TX-ingest factory was supplied: ApplyRadioMicRouting
+            // returns early and nothing downstream is ever armed.
+            txIngest = ingest is not null,
+            p1Receiver = recv is not null,
+            p1SinkAttached = sink is not null,
+            p1MicAttached = _p1RadioMicAttached,
+            // The single-select gate. Host here means radio mic blocks are
+            // dropped even if everything above is wired.
+            activeSource = ingest?.ActiveSource.ToString(),
+            handlerAttached = (sink as Zeus.Protocol1.Protocol1Client)?.RadioMicHandlerAttached,
+            samplesAccepted = recv?.TotalSamplesAccepted,
+            samplesDropped = recv?.TotalSamplesDropped,
+        };
+    }
+
     private void AttachRxSinkP1(IProtocol1Client client)
     {
         // Reset the tick clock so the first IQ frame on the new connection

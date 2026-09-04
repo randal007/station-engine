@@ -75,7 +75,7 @@ public static class RadioIoEndpoints
         // false and the panel shows nothing.
         endpoints.MapGet("/api/radio/audio", (RadioService radio, AudioSettingsStore store) =>
         {
-            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var caps = radio.EffectiveBoardCapabilities;
             var resolved = RadioService.ClampAudioSource(store.Get(), caps);
             return Results.Ok(new AudioFrontEndDto(
                 HasOnboardCodec: caps.HasOnboardCodec,
@@ -104,7 +104,7 @@ public static class RadioIoEndpoints
             if (req is null)
                 return Results.BadRequest(new { error = "body required" });
 
-            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var caps = radio.EffectiveBoardCapabilities;
             bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
             if (!audioCapable)
                 return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no audio front-end" });

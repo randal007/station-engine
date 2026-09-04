@@ -74,8 +74,12 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
     {
         if (!_radio.IsConnected) return false;
         var board = _radio.ConnectedBoardKind;
-        if (board == HpsdrBoardKind.HermesLite2) return false;
-        return BoardCapabilitiesTable.For(board, _radio.EffectiveOrionMkIIVariant).HasOnboardCodec;
+        // Was a blanket HL2 exclusion. An HL2 carrying the AK4951 companion
+        // board does have a codec driving real headphone/speaker jacks, so ask
+        // the capability set (which the operator's HL2+ declaration promotes)
+        // instead of the board name.
+        return BoardCapabilitiesTable.For(
+            board, _radio.EffectiveOrionMkIIVariant, _radio.EffectiveHl2PlusCodec).HasOnboardCodec;
     }
 
     public void Publish(in AudioFrame frame)
@@ -94,21 +98,38 @@ public sealed class RadioSpeakerAudioSink : IRxAudioSink, IDisposable
             _ring.Clear();
             return;
         }
-        if (_radio.IsMox)
-        {
-            // While transmitting, the EP2 L/R slots carry no audio (WriteUsbFrame
-            // only fills them during RX) and the TX-monitor frames arriving here
-            // are not for the radio speaker. Drop the buffer so unkey resumes from
-            // live RX rather than replaying the pre-key tail still in the ring.
-            _ring.Clear();
-            return;
-        }
         var board = _radio.ConnectedBoardKind;
-        if (board == HpsdrBoardKind.HermesLite2) return;
-        if (!BoardCapabilitiesTable.For(board, _radio.EffectiveOrionMkIIVariant).HasOnboardCodec) return;
+        var caps = BoardCapabilitiesTable.For(
+            board, _radio.EffectiveOrionMkIIVariant, _radio.EffectiveHl2PlusCodec);
+        if (!caps.HasOnboardCodec) return;
+
+        bool mox = _radio.IsMox;
+
+        // No drain on the T/R edge. deskHPSDR drains once per transmission, but
+        // Zeus's MOX follows CW break-in — it flips on every dit and dah — so
+        // draining per edge flushes the ring several times a second while the
+        // operator sends, and the gaps are audible as clicking and static on
+        // exactly the board this was meant to help. Measured on an HL2+.
+        if (mox)
+        {
+            // Keyed. The only thing that belongs in the radio's own speaker now
+            // is CW sidetone, which the pipeline has already mixed into this
+            // bus with the band-RX contribution faded out. In every other mode
+            // these frames are TX monitor audio, which is not for the radio
+            // speaker — drop them so unkey resumes from live RX.
+            if (!IsCwMode(_radio.Snapshot().Mode))
+            {
+                _ring.Clear();
+                return;
+            }
+        }
 
         _ring.Write(frame.Samples.Span);
     }
+
+    /// <summary>CW modes are the only ones whose keyed audio bus (sidetone)
+    /// belongs in the radio's own speaker/headphone jacks.</summary>
+    private static bool IsCwMode(RxMode mode) => mode is RxMode.CWU or RxMode.CWL;
 
     private void OnSettingsChanged()
     {

@@ -2442,7 +2442,15 @@ public sealed record Hl2OptionsDto(
     // when no radio is connected. Lets the UI distinguish "switched on" from
     // "switched on and talking", which is the difference between a working
     // install and a missing 0x41 detect.
-    bool? IoBoardPresent = null);
+    bool? IoBoardPresent = null,
+    // HL2+ AK4951 companion board fitted. Undetectable, so this is the
+    // operator's declaration; it promotes the board to a codec board, which is
+    // what surfaces the Radio Mic and speaker-output controls.
+    bool Hl2Plus = false,
+    // False when Band Volts cannot be armed because HL2+ owns Config C3 bit 3.
+    // The UI should disable the Band Volts control rather than let a PUT be
+    // silently refused.
+    bool BandVoltsAvailable = true);
 
 // Mutating version — currently a passthrough of Hl2OptionsDto but kept
 // distinct so the GET-vs-PUT request shapes can diverge in the future
@@ -2452,7 +2460,8 @@ public sealed record Hl2OptionsSetRequest(
     // Nullable = partial update, exactly the divergence the comment above
     // anticipated. An older client PUTs only BandVolts; without this being
     // nullable that request would silently switch the IO board off.
-    bool? IoBoard = null);
+    bool? IoBoard = null,
+    bool? Hl2Plus = null);
 
 // HL2 user GPIO (external-port parity audit — re-port of external-ports plan
 // Phase 5). The 4-bit user_dig_out mask driven on the Protocol-1 0x0a/wire-0x14

@@ -1601,6 +1601,10 @@ public sealed class RadioService : IDisposable
                 // reconnect re-detects the board rather than inheriting a
                 // presence flag from a radio that may have been re-cabled.
                 client.EnableHl2IoBoard = _preferredRadioStore.GetEnableHl2IoBoard();
+                // HL2+ codec-present bit. Rehydrated per client so a fresh
+                // connection's first Config frame already declares the codec —
+                // the gateware needs the bit before mic/speaker audio flows.
+                client.EnableHl2PlusCodec = _preferredRadioStore.GetEnableHl2PlusCodec();
             }
 
             // LT2208 ADC dither / digital-output randomizer — rehydrate the
@@ -4961,7 +4965,13 @@ public sealed class RadioService : IDisposable
         var sel = _audioStore?.Get() ?? AudioSourceSelection.Default;
         var board = EffectiveBoardKind;
         var variant = EffectiveOrionMkIIVariant;
-        var caps = BoardCapabilitiesTable.For(board, variant);
+        // Must be the HL2+-promoted set. The clamp below sends any radio source
+        // back to Host on a board without a codec, so reading the unpromoted
+        // table here silently undid the operator's Radio Mic selection on an
+        // HL2 carrying the companion board — while every queryable surface
+        // (the store, /api/radio/audio, /api/radio/capabilities) went on
+        // reporting RadioMic, because those read the promoted set.
+        var caps = EffectiveBoardCapabilities;
 
         // CLAMP the persisted source against the connected board's capabilities
         // (external-audio-jacks re-port, safety invariant 5). Any source the
@@ -5093,7 +5103,7 @@ public sealed class RadioService : IDisposable
     /// </summary>
     private void PushHl2Gpio()
     {
-        var caps = BoardCapabilitiesTable.For(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        var caps = EffectiveBoardCapabilities;
         byte mask = (caps.HasHl2UserGpio && _hl2GpioStore is not null) ? _hl2GpioStore.Get() : (byte)0;
         ActiveClient?.SetUserDigOut(mask);
     }
@@ -5121,6 +5131,10 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public bool SetHl2BandVolts(bool enabled)
     {
+        // Config C3 bit 3 is claimed by the HL2+ codec-present flag when a
+        // companion board is declared. Refuse rather than fight over it — the
+        // returned value tells the caller what actually happened.
+        if (enabled && EffectiveHl2PlusCodec) return false;
         // Write-through to persistent storage first so a crash between the
         // store write and the live-client push can't lose the preference.
         _preferredRadioStore?.SetEnableHl2BandVolts(enabled);
@@ -5166,6 +5180,38 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public bool GetHl2IoBoard() =>
         _preferredRadioStore?.GetEnableHl2IoBoard() ?? false;
+
+    /// <summary>Whether the operator has declared an HL2+ companion board.</summary>
+    public bool EffectiveHl2PlusCodec =>
+        _preferredRadioStore?.GetEnableHl2PlusCodec() ?? false;
+
+    /// <summary>
+    /// Capability fingerprint for the connected board, including the HL2+
+    /// promotion. Every consumer that asks "does this radio have a codec"
+    /// should read this rather than calling the table directly, or an HL2+
+    /// will look codec-less to half the engine.
+    /// </summary>
+    public BoardCapabilities EffectiveBoardCapabilities =>
+        BoardCapabilitiesTable.For(EffectiveBoardKind, EffectiveOrionMkIIVariant, EffectiveHl2PlusCodec);
+
+    /// <summary>
+    /// Declare or retract the HL2+ companion board. Persists, then pushes the
+    /// codec-present bit to the live client. Band Volts is force-disabled when
+    /// HL2+ is armed: both ride Config C3 bit 3 and the gateware readings are
+    /// incompatible, so arming both would silently mean whichever the gateware
+    /// believes.
+    /// </summary>
+    public bool SetHl2PlusCodec(bool enabled)
+    {
+        _preferredRadioStore?.SetEnableHl2PlusCodec(enabled);
+        if (enabled && (_preferredRadioStore?.GetEnableHl2BandVolts() ?? false))
+        {
+            _preferredRadioStore?.SetEnableHl2BandVolts(false);
+            if (_activeClient is not null) _activeClient.EnableHl2BandVolts = false;
+        }
+        if (_activeClient is not null) _activeClient.EnableHl2PlusCodec = enabled;
+        return enabled;
+    }
 
     /// <summary>
     /// Whether the IO board has actually answered on the live connection.

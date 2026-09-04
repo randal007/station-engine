@@ -89,7 +89,7 @@ public static class RadioStatusEndpoints
         // class. Cross-references docs/references/protocol-1/thetis-board-matrix.md.
         endpoints.MapGet("/api/radio/capabilities", (RadioService radio) =>
         {
-            return Results.Ok(BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant));
+            return Results.Ok(radio.EffectiveBoardCapabilities);
         });
 
         return endpoints;

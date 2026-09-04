@@ -19,6 +19,77 @@ public static class EngineRadioDiagnosticsEndpoints
             Results.Ok(EngineRadioDiagnosticsSnapshot.Capture(
                 services.GetService<RadioService>(),
                 services.GetService<PreferredRadioStore>())));
+
+        // The radio-speaker feed, which is also the operator's CW sidetone path
+        // on a codec board. Read it while listening to answer the only two
+        // questions that matter about this ring: how much delay is in front of
+        // the operator's ears, and whether audio is being discarded.
+        //
+        //   latencyMs   what the delay actually is right now
+        //   trimmed     climbing steadily = host and radio clocks disagree
+        //   dropped     climbing = the ring is too small for the DSP's bursts
+        //   underruns   climbing = the ring is starving and the codec gets gaps
+        //
+        // Same counters as the 1 Hz p1.rx.audio log line, reachable without
+        // going log-hunting for a process the launcher owns the stdout of.
+        endpoints.MapGet("/api/diagnostics/rx-audio", (IServiceProvider services) =>
+        {
+            var ring = services.GetService<Zeus.Protocol1.RxAudioRing>();
+            if (ring is null)
+                return Results.Ok(new { available = false, reason = "no rx audio ring registered" });
+
+            return Results.Ok(new
+            {
+                available = true,
+                count = ring.Count,
+                latencyTargetSamples = ring.LatencyTargetSamples,
+                primed = ring.Primed,
+                primeSamples = ring.PrimeSamples,
+                latencyMs = Math.Round(ring.Count / 48.0, 1),
+                capacity = ring.Capacity,
+                totalWritten = ring.TotalWritten,
+                totalRead = ring.TotalRead,
+                dropped = ring.Dropped,
+                trimmed = ring.Trimmed,
+                underrunSamples = ring.UnderrunSamples,
+            });
+        });
+
+        // What the CW control frames are actually carrying. internalKeyer and
+        // sidetoneLevel are the two values the stock gateware gates its own
+        // headphone sidetone on (0x1E C1[0] and C2). If they read correct here
+        // and the radio still stays silent, the fault is in the radio's
+        // gateware rather than in what Zeus is sending — the distinction that
+        // matters on an HL2+, which runs gateware this codebase has no
+        // reference for.
+        endpoints.MapGet("/api/diagnostics/cw-wire", (RadioService radio) =>
+        {
+            var client = radio.ActiveClient;
+            if (client is not Zeus.Protocol1.Protocol1Client p1)
+                return Results.Ok(new { available = false, reason = "no Protocol-1 client connected" });
+
+            var (internalKeyer, level, hz, wpm, mode) = p1.CwWireState;
+            return Results.Ok(new
+            {
+                available = true,
+                internalKeyer,
+                sidetoneLevel = level,
+                sidetoneHz = hz,
+                wpm,
+                keyerMode = ((Zeus.Contracts.CwKeyerMode)mode).ToString(),
+                rfDelayMs = internalKeyer ? Zeus.Protocol1.ControlFrame.CwKeyerRfDelay(wpm) : 0,
+                hardwareSidetoneShouldSound = internalKeyer && level > 0,
+            });
+        });
+
+        endpoints.MapGet("/api/diagnostics/radio-mic", (IServiceProvider services) =>
+        {
+            var dsp = services.GetService<DspPipelineService>();
+            return dsp is null
+                ? Results.Ok(new { available = false })
+                : Results.Ok(dsp.RadioMicChainSnapshot());
+        });
+
         return endpoints;
     }
 }
