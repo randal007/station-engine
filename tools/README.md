@@ -10,9 +10,12 @@ every reconnect.
 
 ## Before you start
 
-You need to be running an engine built from the `hl2-ioboard` branch. If Zeus is
-still launching the engine it downloads for itself, none of this exists. Point
-Zeus Link at your build:
+You need to be running an engine built from the `hl2-ioboard` branch (or
+`hl2-plus`, which contains it). If Zeus is still launching the engine it
+downloads for itself, none of this exists.
+
+**See [`INSTALL.md`](../INSTALL.md) for how to build the engine and point Zeus
+Link at it.** The short version, once you have a build:
 
 ```
 zeus-link-launcher --engine-path /path/to/your/StationEngine
