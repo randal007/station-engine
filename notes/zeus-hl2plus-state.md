@@ -47,9 +47,12 @@ Operating notes: launch from the **"Zeus Link (Custom Engine)"** menu entry
 downloaded engine, so none of this work is present. The mic chain comes up
 attached on a cold launch; TX audio source is a single-select gate, so
 `{"source":"Host"}` on `/api/radio/audio` returns to the computer's mic and
-`{"source":"RadioMic"}` goes back to the radio's. Zeus has since cached
-engine 2.0.18 while the local build is based on 2.0.17 — still accepted,
-but a future product update may force a rebuild off the newer tag.
+`{"source":"RadioMic"}` goes back to the radio's. Rebased onto upstream v2.0.19 on 2026-09-06 (WDSP 2.00 -> 2.10): both
+branches replayed with zero conflicts and the patch is byte-identical, only
+hunk offsets moved. Note that WDSP 2.10 ships the NNR neural noise
+reduction models in `libwdsp.so`, but the engine has no managed binding for
+them — `NrMode` stops at `Rnnr`, so NNR is not reachable from Zeus the way
+it is from deskHPSDR.
 
 JI1UDD's AK4951 controller is installed at `~/.local/bin/ak4951_ctrl`
 (menu: "AK4951 Controller"), built from source since upstream ships
@@ -58,5 +61,6 @@ over I2C-1 at address 0x12 — a different bus from the IO board at 0x1D, so
 it cannot conflict, and it works alongside Zeus or Thetis. Its config is
 `~/.config/ak4951_ctrl/setting.dat`, line 1 being the radio's IP.
 
-See [[zeus-local-engine-build]] for build flags and how the launcher is
-pointed at the local engine.
+See `zeus-local-engine-build.md` for build flags and how the launcher is
+pointed at the local engine, and `INSTALL.md` on the `tools/ioboard-enable`
+branch for a guide written for other people.

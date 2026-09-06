@@ -14,6 +14,10 @@ exists only to carry these files. The code lives on `hl2-ioboard`
 - **`zeus-hl2plus-state.md`** — what works, the known-good tag, the traps
   that each cost hours, and what is still open.
 
+**If you are trying to install this rather than understand it, read
+`INSTALL.md` on the `tools/ioboard-enable` branch instead.** These notes are
+working memory with machine-local paths; that file is the actual guide.
+
 The two things most worth reading before touching CW again:
 
 1. **The FPGA keyer only arms in CW mode**, and every engine restart drops
