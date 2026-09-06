@@ -143,6 +143,14 @@ and what each value means.
 rm ~/.local/bin/zeus-link
 ```
 
+If you made a menu entry pointing at that wrapper, remove it too or it will
+sit there doing nothing:
+
+```bash
+rm -f ~/.local/share/applications/zeus-link-custom.desktop
+update-desktop-database ~/.local/share/applications 2>/dev/null
+```
+
 Launch Zeus Link normally and it uses its own engine again. To be thorough,
 `rm -rf ~/.local/opt/zeus-link/engine` as well.
 
