@@ -115,15 +115,22 @@ it and re-applies it on every reconnect.
 ```bash
 # IO board
 curl -s -X PUT http://127.0.0.1:$port/api/radio/hl2-options \
-  -H 'Content-Type: application/json' -d '{"ioBoard":true}'
+  -H 'Content-Type: application/json' -d '{"bandVolts":false,"ioBoard":true}'
 
 # HL2+ companion board
 curl -s -X PUT http://127.0.0.1:$port/api/radio/hl2-options \
-  -H 'Content-Type: application/json' -d '{"hl2Plus":true}'
+  -H 'Content-Type: application/json' -d '{"bandVolts":false,"hl2Plus":true}'
 ```
 
+**Always send `bandVolts` explicitly.** `ioBoard` and `hl2Plus` are partial
+updates — omit one and it keeps its current value — but `bandVolts` is not:
+it is applied on every request, so leaving it out of the JSON writes `false`.
+A request of `{"ioBoard":true}` alone will silently switch Band Volts off. If
+you use Band Volts (mi0bot's HL2 fork), send `"bandVolts":true` in both
+commands above. Verified against v2.0.19.
+
 `tools/zeus-ioboard-enable.sh` in this directory does the IO board one for you,
-including finding the port. See `tools/README.md` for reading `ioBoardPresent`
+including finding the port and sending `bandVolts` explicitly. See `tools/README.md` for reading `ioBoardPresent`
 and what each value means.
 
 > **Only declare a board you physically have.** `hl2Plus` claims Config frame C3
@@ -137,9 +144,13 @@ rm ~/.local/bin/zeus-link
 ```
 
 Launch Zeus Link normally and it uses its own engine again. To be thorough,
-`rm -rf ~/.local/opt/zeus-link/engine` as well. Settings you enabled above live
-in the engine's preferences database and are simply ignored by an engine that
-does not understand them.
+`rm -rf ~/.local/opt/zeus-link/engine` as well.
+
+Settings you enabled above are **not** stored in the engine directory — they
+live in `~/.local/share/Zeus/station-engine.db`, shared by whichever engine
+runs. They survive deleting your build and are simply ignored by an engine
+that does not understand them, so switching back and forth is safe and your
+choices are still there when you return.
 
 ## If something does not work
 
